@@ -220,7 +220,7 @@ def fetch_training_data(
 
 
 def fetch_live_forecast() -> pd.DataFrame:
-    """Retrieve a two-day forecast plus recent NWP context for Bengaluru."""
+    """Retrieve a compact live forecast for Bengaluru."""
     payload = _cached_json(
         LIVE_FORECAST_URL,
         {
@@ -228,15 +228,18 @@ def fetch_live_forecast() -> pd.DataFrame:
             "longitude": LONGITUDE,
             "timezone": TIMEZONE,
             "hourly": ",".join(WEATHER_VARIABLES),
-            "past_days": 3,
+            "past_days": 1,
             "forecast_days": 2,
         },
         ttl_seconds=30 * 60,
+        timeout=(10, 30),
     )
+
     forecast = _hourly_frame(payload, WEATHER_VARIABLES).rename(
         columns=HINDCAST_RENAME
     )
+
     if forecast.empty:
         raise DataSourceError("Open-Meteo returned an empty live forecast.")
-    return forecast
 
+    return forecast

@@ -74,32 +74,64 @@ def _cached_json(
     cache_key = json.dumps([url, params], sort_keys=True, separators=(",", ":"))
     cache_path = _cache_directory() / f"{hashlib.sha256(cache_key.encode()).hexdigest()}.json"
 
-    if cache_path.exists() and time.time() - cache_path.stat().st_mtime < ttl_seconds:
+    cached_payload = None
+    cache_age = None
+
+    if cache_path.exists():
         try:
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            cache_age = time.time() - cache_path.stat().st_mtime
+            cached_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            if not isinstance(cached_payload, dict):
+                cached_payload = None
         except (OSError, json.JSONDecodeError):
-            cache_path.unlink(missing_ok=True)
+            cached_payload = None
+
+    # Use fresh cached data without making another API request.
+    if cached_payload is not None and cache_age is not None and cache_age < ttl_seconds:
+        return cached_payload
 
     payload = None
+    last_error = None
 
     for attempt in range(3):
         try:
             response = requests.get(url, params=params, timeout=timeout)
+
+            # A 429 is a rate limit: stop retrying and use real cached data.
+            if response.status_code == 429:
+                last_error = requests.HTTPError(
+                    f"429 Too Many Requests for URL: {response.url}",
+                    response=response,
+                )
+                break
+
             response.raise_for_status()
             payload = response.json()
             break
+
         except requests.RequestException as error:
-            if attempt == 2:
-                raise DataSourceError(
-                    f"Open-Meteo request failed after 3 attempts: {error}"
-                ) from error
-            time.sleep(2 ** attempt)
+            last_error = error
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
         except ValueError as error:
-            raise DataSourceError(
-                "Open-Meteo returned invalid JSON."
-            ) from error
+            last_error = error
+            break
 
     if not isinstance(payload, dict) or payload.get("error"):
+        # Fall back only to a previously saved real Open-Meteo response.
+        if cached_payload is not None:
+            logger.warning(
+                "Open-Meteo unavailable; using previously cached real data. Error: %s",
+                last_error or "invalid response",
+            )
+            return cached_payload
+
+        if last_error is not None:
+            raise DataSourceError(
+                f"Open-Meteo request failed: {last_error}"
+            ) from last_error
+
         reason = (
             payload.get("reason", "unexpected response shape")
             if isinstance(payload, dict)
@@ -126,7 +158,6 @@ def _cached_json(
         )
 
     return payload
-
 
 
 def _hourly_frame(

@@ -56,7 +56,7 @@ st.markdown(
 @st.cache_data(show_spinner=False, ttl=24 * 60 * 60)
 def load_training_history() -> pd.DataFrame:
     return fetch_training_data(
-        start_date=date(2023, 1, 1),
+        start_date=date(2025, 1, 1),
         end_date=date.today() - timedelta(days=6),
     )
 

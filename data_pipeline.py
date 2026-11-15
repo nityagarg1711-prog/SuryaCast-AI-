@@ -228,7 +228,7 @@ def fetch_live_forecast() -> pd.DataFrame:
             "longitude": LONGITUDE,
             "timezone": TIMEZONE,
             "hourly": ",".join(WEATHER_VARIABLES),
-            "past_days": 1,
+            "past_days": 3,
             "forecast_days": 2,
         },
         ttl_seconds=30 * 60,

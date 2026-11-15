@@ -64,46 +64,69 @@ def _cache_directory() -> Path:
     return directory
 
 
+
 def _cached_json(
     url: str,
     params: dict[str, Any],
     ttl_seconds: int,
-    timeout: tuple[float, float] = (5, 45),
+    timeout: tuple[float, float] = (10, 60),
 ) -> dict[str, Any]:
     cache_key = json.dumps([url, params], sort_keys=True, separators=(",", ":"))
     cache_path = _cache_directory() / f"{hashlib.sha256(cache_key.encode()).hexdigest()}.json"
+
     if cache_path.exists() and time.time() - cache_path.stat().st_mtime < ttl_seconds:
         try:
             return json.loads(cache_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             cache_path.unlink(missing_ok=True)
 
-    try:
-        response = requests.get(url, params=params, timeout=timeout)
-        response.raise_for_status()
-        payload = response.json()
-    except requests.RequestException as error:
-        raise DataSourceError(f"Open-Meteo request failed: {error}") from error
-    except ValueError as error:
-        raise DataSourceError("Open-Meteo returned invalid JSON.") from error
+    payload = None
+
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
+            payload = response.json()
+            break
+        except requests.RequestException as error:
+            if attempt == 2:
+                raise DataSourceError(
+                    f"Open-Meteo request failed after 3 attempts: {error}"
+                ) from error
+            time.sleep(2 ** attempt)
+        except ValueError as error:
+            raise DataSourceError(
+                "Open-Meteo returned invalid JSON."
+            ) from error
 
     if not isinstance(payload, dict) or payload.get("error"):
-        reason = payload.get("reason", "unexpected response shape") if isinstance(payload, dict) else "unexpected response shape"
+        reason = (
+            payload.get("reason", "unexpected response shape")
+            if isinstance(payload, dict)
+            else "unexpected response shape"
+        )
         raise DataSourceError(f"Open-Meteo rejected the request: {reason}")
 
     temporary_path: str | None = None
+
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=cache_path.parent, delete=False
         ) as temporary_file:
             json.dump(payload, temporary_file)
             temporary_path = temporary_file.name
+
         os.replace(temporary_path, cache_path)
+
     except OSError:
         if temporary_path is not None:
             Path(temporary_path).unlink(missing_ok=True)
-        logger.warning("Could not write Open-Meteo response cache at %s", cache_path)
+        logger.warning(
+            "Could not write Open-Meteo response cache at %s", cache_path
+        )
+
     return payload
+
 
 
 def _hourly_frame(
